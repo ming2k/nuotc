@@ -1,0 +1,30 @@
+[package]
+name = "nuotc"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "High-performance retained-mode terminal canvas and diff rendering engine"
+repository = "https://github.com/ming2k/nuotc"
+readme = "README.md"
+keywords = ["tui", "terminal", "canvas", "grid", "diff"]
+categories = ["command-line-interface", "graphics"]
+
+[dependencies]
+crossterm = { version = "0.29", features = ["event-stream"] }
+unicode-width = "0.2"
+unicode-segmentation = "1.12"
+bitflags = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+dbg_macro = "warn"
