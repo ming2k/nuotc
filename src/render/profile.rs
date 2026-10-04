@@ -162,7 +162,7 @@ pub enum ElevationArchetype {
 }
 
 impl ElevationArchetype {
-    /// Resolve the visual archetype for a given capability profile.
+    /// Resolve the default visual archetype for a given capability profile.
     pub const fn for_profile(profile: &TerminalProfile) -> Self {
         match profile.color_standard {
             ColorStandard::DirectColor => Self::Chromatic,
@@ -170,6 +170,13 @@ impl ElevationArchetype {
             ColorStandard::Ansi16 => Self::Hybrid,
             ColorStandard::Monochrome => Self::Structured,
         }
+    }
+
+    /// Resolve the default visual archetype for a given capability profile.
+    /// Applications may override this default (e.g. accessibility/high-contrast mode).
+    #[inline]
+    pub const fn default_for_profile(profile: &TerminalProfile) -> Self {
+        Self::for_profile(profile)
     }
 
     /// Spatial cost deducted before evaluating responsive breakpoints and child viewports.
@@ -262,6 +269,12 @@ impl TerminalProfile {
             supports_sync_update: false,
             supports_mouse: false,
         }
+    }
+
+    /// Return the active color model for this terminal profile.
+    #[inline]
+    pub const fn color_model(&self) -> ColorModel {
+        self.color_standard
     }
 
     /// Return the visual elevation archetype for this terminal profile (ADR-0181).
