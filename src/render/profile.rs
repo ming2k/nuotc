@@ -27,6 +27,38 @@ pub enum ColorStandard {
     Monochrome,
 }
 
+impl ColorStandard {
+    /// Whether this color standard supports chromatic colors (non-monochrome).
+    #[inline]
+    pub const fn supports_color(self) -> bool {
+        !matches!(self, Self::Monochrome)
+    }
+
+    /// Whether this color standard supports visual color themes (requires at least ANSI 16).
+    #[inline]
+    pub const fn supports_color_themes(self) -> bool {
+        !matches!(self, Self::Monochrome)
+    }
+
+    /// Whether this color standard is monochromatic.
+    #[inline]
+    pub const fn is_monochrome(self) -> bool {
+        matches!(self, Self::Monochrome)
+    }
+
+    /// Whether this color standard is 24-bit TrueColor.
+    #[inline]
+    pub const fn is_direct_color(self) -> bool {
+        matches!(self, Self::DirectColor)
+    }
+
+    /// Whether this color standard is 16-color ANSI.
+    #[inline]
+    pub const fn is_ansi16(self) -> bool {
+        matches!(self, Self::Ansi16)
+    }
+}
+
 /// Standard terminal character set capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CharsetStandard {
@@ -180,6 +212,68 @@ impl TerminalProfile {
         ElevationArchetype::for_profile(self)
     }
 
+    /// Whether this terminal environment supports color rendering (non-monochrome).
+    #[inline]
+    pub const fn supports_color(&self) -> bool {
+        self.color_standard.supports_color()
+    }
+
+    /// Whether this terminal supports visual color themes (requires at least ANSI 16).
+    #[inline]
+    pub const fn supports_color_themes(&self) -> bool {
+        self.color_standard.supports_color_themes()
+    }
+
+    /// Whether this terminal supports arbitrary 24-bit TrueColor palette customization.
+    #[inline]
+    pub const fn supports_custom_palettes(&self) -> bool {
+        self.color_standard.is_direct_color()
+    }
+
+    /// Whether this terminal reproduces full ITU-T T.416 24-bit TrueColor.
+    #[inline]
+    pub const fn supports_truecolor(&self) -> bool {
+        self.color_standard.is_direct_color()
+    }
+
+    /// Whether this terminal reproduces full ITU-T T.416 24-bit TrueColor.
+    #[inline]
+    pub const fn is_direct_color(&self) -> bool {
+        self.color_standard.is_direct_color()
+    }
+
+    /// Whether this terminal is restricted to ECMA-48 16-color ANSI rendering.
+    #[inline]
+    pub const fn is_ansi16(&self) -> bool {
+        self.color_standard.is_ansi16()
+    }
+
+    /// Whether this terminal is operating in DEC VT100 / NO_COLOR monochromatic mode.
+    #[inline]
+    pub const fn is_monochrome(&self) -> bool {
+        self.color_standard.is_monochrome()
+    }
+
+    /// Approximate color depth in bits (DirectColor: 24, Ansi16: 4, Monochrome: 1).
+    #[inline]
+    pub const fn color_depth_bits(&self) -> u8 {
+        match self.color_standard {
+            ColorStandard::DirectColor => 24,
+            ColorStandard::Ansi16 => 4,
+            ColorStandard::Monochrome => 1,
+        }
+    }
+
+    /// Nominal number of distinct colors addressable by the profile.
+    #[inline]
+    pub const fn color_count(&self) -> u32 {
+        match self.color_standard {
+            ColorStandard::DirectColor => 16_777_216,
+            ColorStandard::Ansi16 => 16,
+            ColorStandard::Monochrome => 2,
+        }
+    }
+
     /// Detect terminal capability profile from environment variables and standards.
     pub fn detect() -> Self {
         let term = std::env::var("TERM").unwrap_or_default();
@@ -188,9 +282,22 @@ impl TerminalProfile {
         let color_override = std::env::var("MUTA_COLOR_STANDARD").ok();
         let charset_override = std::env::var("MUTA_CHARSET_STANDARD").ok();
 
+        // Modern terminal emulator detection (Ghostty, WezTerm, Kitty, Windows Terminal, VS Code)
+        let modern_terminal = std::env::var_os("GHOSTTY_RESOURCES_DIR").is_some()
+            || std::env::var_os("KITTY_WINDOW_ID").is_some()
+            || std::env::var_os("WEZTERM_PANE").is_some()
+            || std::env::var_os("WT_SESSION").is_some()
+            || std::env::var("TERM_PROGRAM").map(|p| p == "vscode" || p == "iTerm.app" || p == "Apple_Terminal").unwrap_or(false);
+
+        let effective_colorterm = if colorterm.is_empty() && modern_terminal {
+            "truecolor".to_string()
+        } else {
+            colorterm
+        };
+
         Self::for_env(
             &term,
-            &colorterm,
+            &effective_colorterm,
             no_color,
             color_override.as_deref(),
             charset_override.as_deref(),
@@ -424,5 +531,41 @@ mod tests {
         assert_eq!(quantize_to_ansi16(Color::Rgb(170, 0, 0)), Color::Red);
         assert_eq!(quantize_to_ansi16(Color::Rgb(255, 85, 85)), Color::LightRed);
         assert_eq!(quantize_to_ansi16(Color::Reset), Color::Reset);
+    }
+
+    #[test]
+    fn test_profile_capability_predicates() {
+        let direct = TerminalProfile::direct_color();
+        assert!(direct.supports_color());
+        assert!(direct.supports_color_themes());
+        assert!(direct.supports_custom_palettes());
+        assert!(direct.supports_truecolor());
+        assert!(direct.is_direct_color());
+        assert!(!direct.is_ansi16());
+        assert!(!direct.is_monochrome());
+        assert_eq!(direct.color_depth_bits(), 24);
+        assert_eq!(direct.color_count(), 16_777_216);
+
+        let ansi16 = TerminalProfile::ecma48_ansi16();
+        assert!(ansi16.supports_color());
+        assert!(ansi16.supports_color_themes());
+        assert!(!ansi16.supports_custom_palettes());
+        assert!(!ansi16.supports_truecolor());
+        assert!(!ansi16.is_direct_color());
+        assert!(ansi16.is_ansi16());
+        assert!(!ansi16.is_monochrome());
+        assert_eq!(ansi16.color_depth_bits(), 4);
+        assert_eq!(ansi16.color_count(), 16);
+
+        let mono = TerminalProfile::dec_vt100_monochrome();
+        assert!(!mono.supports_color());
+        assert!(!mono.supports_color_themes());
+        assert!(!mono.supports_custom_palettes());
+        assert!(!mono.supports_truecolor());
+        assert!(!mono.is_direct_color());
+        assert!(!mono.is_ansi16());
+        assert!(mono.is_monochrome());
+        assert_eq!(mono.color_depth_bits(), 1);
+        assert_eq!(mono.color_count(), 2);
     }
 }
