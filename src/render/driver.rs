@@ -20,7 +20,7 @@ use crossterm::{
     terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate},
 };
 
-use crate::profile::{ColorStandard, TerminalProfile, quantize_to_ansi16};
+use crate::profile::{ColorStandard, TerminalProfile, quantize_to_ansi16, quantize_to_indexed256};
 use crate::{Color, Modifier, Style};
 
 /// Trait defining the terminal escape emission contract.
@@ -41,6 +41,7 @@ pub trait EscapeEmitter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalDriver {
     DirectColor(DirectColorDriver),
+    Indexed256(Indexed256Driver),
     Ansi16(Ansi16Driver),
     Monochrome(MonochromeDriver),
 }
@@ -50,6 +51,7 @@ impl TerminalDriver {
     pub fn for_profile(profile: &TerminalProfile) -> Self {
         match profile.color_standard {
             ColorStandard::DirectColor => Self::DirectColor(DirectColorDriver::new()),
+            ColorStandard::Indexed256 => Self::Indexed256(Indexed256Driver::new(profile.supports_mouse)),
             ColorStandard::Ansi16 => Self::Ansi16(Ansi16Driver::new(profile.supports_mouse)),
             ColorStandard::Monochrome => Self::Monochrome(MonochromeDriver::new()),
         }
@@ -59,6 +61,7 @@ impl TerminalDriver {
     pub fn color_standard(&self) -> ColorStandard {
         match self {
             Self::DirectColor(_) => ColorStandard::DirectColor,
+            Self::Indexed256(_) => ColorStandard::Indexed256,
             Self::Ansi16(_) => ColorStandard::Ansi16,
             Self::Monochrome(_) => ColorStandard::Monochrome,
         }
@@ -74,6 +77,7 @@ impl EscapeEmitter for TerminalDriver {
     fn apply_style<W: Write>(&mut self, want: Style, out: &mut W) -> io::Result<()> {
         match self {
             Self::DirectColor(d) => d.apply_style(want, out),
+            Self::Indexed256(d) => d.apply_style(want, out),
             Self::Ansi16(d) => d.apply_style(want, out),
             Self::Monochrome(d) => d.apply_style(want, out),
         }
@@ -82,6 +86,7 @@ impl EscapeEmitter for TerminalDriver {
     fn begin_sync<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
         match self {
             Self::DirectColor(d) => d.begin_sync(out),
+            Self::Indexed256(d) => d.begin_sync(out),
             Self::Ansi16(d) => d.begin_sync(out),
             Self::Monochrome(d) => d.begin_sync(out),
         }
@@ -90,6 +95,7 @@ impl EscapeEmitter for TerminalDriver {
     fn end_sync<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
         match self {
             Self::DirectColor(d) => d.end_sync(out),
+            Self::Indexed256(d) => d.end_sync(out),
             Self::Ansi16(d) => d.end_sync(out),
             Self::Monochrome(d) => d.end_sync(out),
         }
@@ -98,6 +104,7 @@ impl EscapeEmitter for TerminalDriver {
     fn invalidate<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
         match self {
             Self::DirectColor(d) => d.invalidate(out),
+            Self::Indexed256(d) => d.invalidate(out),
             Self::Ansi16(d) => d.invalidate(out),
             Self::Monochrome(d) => d.invalidate(out),
         }
@@ -106,6 +113,7 @@ impl EscapeEmitter for TerminalDriver {
     fn supports_mouse(&self) -> bool {
         match self {
             Self::DirectColor(d) => d.supports_mouse(),
+            Self::Indexed256(d) => d.supports_mouse(),
             Self::Ansi16(d) => d.supports_mouse(),
             Self::Monochrome(d) => d.supports_mouse(),
         }
@@ -186,6 +194,86 @@ impl EscapeEmitter for DirectColorDriver {
 
     fn supports_mouse(&self) -> bool {
         true
+    }
+}
+
+// Profile 1.5: Indexed256Driver (8-bit Indexed Color)
+
+/// 8-bit Indexed 256-color driver for xterm-256color, tmux, and modern remote shells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Indexed256Driver {
+    style: Style,
+    supports_mouse: bool,
+}
+
+impl Default for Indexed256Driver {
+    fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl Indexed256Driver {
+    pub const fn new(supports_mouse: bool) -> Self {
+        Self {
+            style: Style::RESET,
+            supports_mouse,
+        }
+    }
+}
+
+impl EscapeEmitter for Indexed256Driver {
+    fn apply_style<W: Write>(&mut self, mut want: Style, out: &mut W) -> io::Result<()> {
+        want.fg = quantize_to_indexed256(want.fg);
+        want.bg = quantize_to_indexed256(want.bg);
+        if want == self.style {
+            return Ok(());
+        }
+        let have = self.style;
+        if want.fg != have.fg {
+            out.queue(SetForegroundColor(to_ct_color(want.fg)))?;
+        }
+        if want.bg != have.bg {
+            out.queue(SetBackgroundColor(to_ct_color(want.bg)))?;
+        }
+
+        let dropped = have.add & !want.add;
+        let added = want.add & !have.add;
+        if !dropped.is_empty() {
+            out.queue(SetAttribute(Attribute::Reset))?;
+            if want.fg != Color::Reset {
+                out.queue(SetForegroundColor(to_ct_color(want.fg)))?;
+            }
+            if want.bg != Color::Reset {
+                out.queue(SetBackgroundColor(to_ct_color(want.bg)))?;
+            }
+            for attr in iter_attrs(want.add) {
+                out.queue(SetAttribute(attr))?;
+            }
+        } else {
+            for attr in iter_attrs(added) {
+                out.queue(SetAttribute(attr))?;
+            }
+        }
+        self.style = want;
+        Ok(())
+    }
+
+    fn begin_sync<W: Write>(&mut self, _out: &mut W) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn end_sync<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
+        out.flush()
+    }
+
+    fn invalidate<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
+        out.queue(SetAttribute(Attribute::Reset))?;
+        self.style = Style::RESET;
+        Ok(())
+    }
+
+    fn supports_mouse(&self) -> bool {
+        self.supports_mouse
     }
 }
 
@@ -366,6 +454,7 @@ pub fn to_ct_color(c: Color) -> CtColor {
     match c {
         Color::Reset => CtColor::Reset,
         Color::Rgb(r, g, b) => CtColor::Rgb { r, g, b },
+        Color::Indexed(idx) => CtColor::AnsiValue(idx),
         Color::Black => CtColor::Black,
         Color::Red => CtColor::DarkRed,
         Color::Green => CtColor::DarkGreen,

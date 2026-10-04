@@ -22,6 +22,13 @@ fn render_test_frame_with_driver(
     let mut sink = Vec::new();
     let profile = match driver {
         TerminalDriver::DirectColor(_) => TerminalProfile::direct_color(),
+        TerminalDriver::Indexed256(ref d) => TerminalProfile {
+            color_standard: ColorStandard::Indexed256,
+            charset_standard: CharsetStandard::Utf8,
+            supports_italic: true,
+            supports_sync_update: false,
+            supports_mouse: d.supports_mouse(),
+        },
         TerminalDriver::Ansi16(ref d) => TerminalProfile {
             color_standard: ColorStandard::Ansi16,
             charset_standard: CharsetStandard::Utf8,
@@ -252,4 +259,25 @@ fn smoke_scenario_5_constrained_80x24_getty_geometry() {
     assert_eq!(grid.get(0, 23).unwrap().symbol(), "|");
     assert_eq!(grid.get(79, 0).unwrap().symbol(), "|");
     assert_eq!(grid.get(79, 23).unwrap().symbol(), "|");
+}
+
+#[test]
+fn smoke_scenario_6_indexed256_emission_and_quantization() {
+    let profile = TerminalProfile::indexed256();
+    assert!(profile.supports_color());
+    assert!(profile.supports_color_themes());
+    assert!(profile.supports_256_color());
+    assert!(profile.is_indexed256());
+    assert_eq!(profile.color_depth_bits(), 8);
+    assert_eq!(profile.color_count(), 256);
+
+    let mut driver = nuotc::driver::Indexed256Driver::new(true);
+    let mut sink = Vec::new();
+    let style = Style::default().fg(Color::Rgb(255, 0, 0));
+    driver.apply_style(style, &mut sink).unwrap();
+    let output = String::from_utf8_lossy(&sink);
+    assert!(
+        output.contains("\x1b[38;5;"),
+        "Indexed256 driver must emit 38;5; escape sequences: {output:?}"
+    );
 }

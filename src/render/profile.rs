@@ -21,11 +21,16 @@ pub enum ColorStandard {
     /// ITU-T T.416 Direct Color: 24-bit TrueColor via `\x1b[38;2;r;g;bm` and `\x1b[48;2;r;g;bm`.
     #[default]
     DirectColor,
+    /// 8-bit Indexed 256-color palette (`\x1b[38;5;{n}m`, `\x1b[48;5;{n}m`).
+    Indexed256,
     /// ECMA-48 5th Edition 8-color + aixterm 16-color (`\x1b[30..37m`, `\x1b[90..97m`).
     Ansi16,
     /// DEC VT100 Monochrome: Zero color codes emitted; visual emphasis uses SGR 7 (Reverse Video).
     Monochrome,
 }
+
+/// Type alias for modern, capability-first domain terminology.
+pub type ColorModel = ColorStandard;
 
 impl ColorStandard {
     /// Whether this color standard supports chromatic colors (non-monochrome).
@@ -38,6 +43,24 @@ impl ColorStandard {
     #[inline]
     pub const fn supports_color_themes(self) -> bool {
         !matches!(self, Self::Monochrome)
+    }
+
+    /// Whether this color standard supports 24-bit TrueColor.
+    #[inline]
+    pub const fn supports_truecolor(self) -> bool {
+        matches!(self, Self::DirectColor)
+    }
+
+    /// Whether this color standard supports at least 256 colors.
+    #[inline]
+    pub const fn supports_256_color(self) -> bool {
+        matches!(self, Self::DirectColor | Self::Indexed256)
+    }
+
+    /// Whether this color standard is 8-bit Indexed 256-color.
+    #[inline]
+    pub const fn is_indexed256(self) -> bool {
+        matches!(self, Self::Indexed256)
     }
 
     /// Whether this color standard is monochromatic.
@@ -56,6 +79,28 @@ impl ColorStandard {
     #[inline]
     pub const fn is_ansi16(self) -> bool {
         matches!(self, Self::Ansi16)
+    }
+
+    /// Color depth in bits.
+    #[inline]
+    pub const fn color_depth_bits(self) -> u8 {
+        match self {
+            Self::DirectColor => 24,
+            Self::Indexed256 => 8,
+            Self::Ansi16 => 4,
+            Self::Monochrome => 1,
+        }
+    }
+
+    /// Nominal number of distinct colors addressable by the standard.
+    #[inline]
+    pub const fn color_count(self) -> u32 {
+        match self {
+            Self::DirectColor => 16_777_216,
+            Self::Indexed256 => 256,
+            Self::Ansi16 => 16,
+            Self::Monochrome => 2,
+        }
     }
 }
 
@@ -121,6 +166,7 @@ impl ElevationArchetype {
     pub const fn for_profile(profile: &TerminalProfile) -> Self {
         match profile.color_standard {
             ColorStandard::DirectColor => Self::Chromatic,
+            ColorStandard::Indexed256 => Self::Chromatic,
             ColorStandard::Ansi16 => Self::Hybrid,
             ColorStandard::Monochrome => Self::Structured,
         }
@@ -185,6 +231,17 @@ impl TerminalProfile {
         }
     }
 
+    /// Profile 1.5: 8-bit Indexed 256-color profile (xterm-256color, tmux, mosh).
+    pub const fn indexed256() -> Self {
+        Self {
+            color_standard: ColorStandard::Indexed256,
+            charset_standard: CharsetStandard::Utf8,
+            supports_italic: true,
+            supports_sync_update: false,
+            supports_mouse: true,
+        }
+    }
+
     /// Profile 2: ECMA-48 Standard 16-Color profile.
     pub const fn ecma48_ansi16() -> Self {
         Self {
@@ -236,6 +293,18 @@ impl TerminalProfile {
         self.color_standard.is_direct_color()
     }
 
+    /// Whether this terminal supports at least 256 colors.
+    #[inline]
+    pub const fn supports_256_color(&self) -> bool {
+        self.color_standard.supports_256_color()
+    }
+
+    /// Whether this terminal reproduces 8-bit Indexed 256-color palette.
+    #[inline]
+    pub const fn is_indexed256(&self) -> bool {
+        self.color_standard.is_indexed256()
+    }
+
     /// Whether this terminal reproduces full ITU-T T.416 24-bit TrueColor.
     #[inline]
     pub const fn is_direct_color(&self) -> bool {
@@ -254,24 +323,16 @@ impl TerminalProfile {
         self.color_standard.is_monochrome()
     }
 
-    /// Approximate color depth in bits (DirectColor: 24, Ansi16: 4, Monochrome: 1).
+    /// Approximate color depth in bits (DirectColor: 24, Indexed256: 8, Ansi16: 4, Monochrome: 1).
     #[inline]
     pub const fn color_depth_bits(&self) -> u8 {
-        match self.color_standard {
-            ColorStandard::DirectColor => 24,
-            ColorStandard::Ansi16 => 4,
-            ColorStandard::Monochrome => 1,
-        }
+        self.color_standard.color_depth_bits()
     }
 
     /// Nominal number of distinct colors addressable by the profile.
     #[inline]
     pub const fn color_count(&self) -> u32 {
-        match self.color_standard {
-            ColorStandard::DirectColor => 16_777_216,
-            ColorStandard::Ansi16 => 16,
-            ColorStandard::Monochrome => 2,
-        }
+        self.color_standard.color_count()
     }
 
     /// Detect terminal capability profile from environment variables and standards.
@@ -316,6 +377,7 @@ impl TerminalProfile {
         let color_standard = if let Some(ov) = color_override {
             match ov {
                 "direct" | "truecolor" | "24bit" => ColorStandard::DirectColor,
+                "256" | "indexed" | "indexed256" => ColorStandard::Indexed256,
                 "ansi16" | "16" | "basic" => ColorStandard::Ansi16,
                 "monochrome" | "mono" | "0" => ColorStandard::Monochrome,
                 _ => ColorStandard::DirectColor,
@@ -329,10 +391,12 @@ impl TerminalProfile {
             ColorStandard::DirectColor
         } else if term == "linux" || term.contains("16color") || term == "xterm" {
             ColorStandard::Ansi16
+        } else if term.contains("256color") {
+            ColorStandard::Indexed256
         } else if term.is_empty() || term == "dumb" {
             ColorStandard::Monochrome
         } else {
-            // Default to DirectColor for modern pseudo-terminals (xterm-256color, tmux, etc.)
+            // Default to DirectColor for modern pseudo-terminals
             ColorStandard::DirectColor
         };
 
@@ -349,7 +413,7 @@ impl TerminalProfile {
             CharsetStandard::Utf8
         };
 
-        let supports_italic = matches!(color_standard, ColorStandard::DirectColor)
+        let supports_italic = matches!(color_standard, ColorStandard::DirectColor | ColorStandard::Indexed256)
             && term != "linux"
             && !term.starts_with("vt");
 
@@ -373,6 +437,10 @@ impl TerminalProfile {
         match self.color_standard {
             ColorStandard::DirectColor => {
                 // Passthrough
+            }
+            ColorStandard::Indexed256 => {
+                s.fg = quantize_to_indexed256(s.fg);
+                s.bg = quantize_to_indexed256(s.bg);
             }
             ColorStandard::Ansi16 => {
                 s.fg = quantize_to_ansi16(s.fg);
@@ -411,6 +479,61 @@ fn is_vt100_or_serial(term: &str) -> bool {
         || lower.starts_with("ttys")
         || lower.starts_with("ttyusb")
         || lower == "serial"
+}
+
+/// Quantize any [`Color`] down to the 8-bit 256-color palette (0..255).
+pub fn quantize_to_indexed256(color: Color) -> Color {
+    match color {
+        Color::Reset => Color::Reset,
+        Color::Indexed(idx) => Color::Indexed(idx),
+        Color::Rgb(r, g, b) => Color::Indexed(nearest_indexed256(r, g, b)),
+        named => named,
+    }
+}
+
+/// Find nearest 256-color palette index for given (r, g, b).
+pub fn nearest_indexed256(r: u8, g: u8, b: u8) -> u8 {
+    // 1. Candidate from 6x6x6 color cube (indices 16..231)
+    let cube_index = |v: u8| -> (u8, u8) {
+        const STEPS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+        let mut best_i = 0;
+        let mut best_d = (v as i32 - STEPS[0] as i32).abs();
+        for i in 1..6 {
+            let d = (v as i32 - STEPS[i] as i32).abs();
+            if d < best_d {
+                best_d = d;
+                best_i = i;
+            }
+        }
+        (best_i as u8, STEPS[best_i])
+    };
+    let (cr, vr) = cube_index(r);
+    let (cg, vg) = cube_index(g);
+    let (cb, vb) = cube_index(b);
+    let cube_idx = 16 + 36 * cr + 6 * cg + cb;
+    let dist_cube = (r as i32 - vr as i32).pow(2)
+        + (g as i32 - vg as i32).pow(2)
+        + (b as i32 - vb as i32).pow(2);
+
+    // 2. Candidate from 24-step grayscale ramp (indices 232..255)
+    let avg = ((r as u32 + g as u32 + b as u32) / 3) as u8;
+    let gray_idx = if avg < 8 {
+        0
+    } else if avg > 238 {
+        23
+    } else {
+        ((avg - 8 + 5) / 10).min(23)
+    };
+    let gray_val = 8 + gray_idx * 10;
+    let dist_gray = (r as i32 - gray_val as i32).pow(2)
+        + (g as i32 - gray_val as i32).pow(2)
+        + (b as i32 - gray_val as i32).pow(2);
+
+    if dist_gray < dist_cube {
+        232 + gray_idx
+    } else {
+        cube_idx
+    }
 }
 
 /// Quantize any [`Color`] down to the ECMA-48 / aixterm 16 ANSI color space.

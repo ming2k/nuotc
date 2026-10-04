@@ -92,9 +92,10 @@ pub use crate::layout::{
 
 // Re-export render primitives
 pub use crate::render::{
-    Ansi16Driver, Canvas, CharsetStandard, ColorStandard, DirectColorDriver, DisplayList, Draw,
-    DrawCmd, DrawOp, ElevationArchetype, EscapeEmitter, MonochromeDriver, Rasterizer, RenderNode,
-    SpatialCost, TerminalDriver, TerminalProfile,
+    Ansi16Driver, Canvas, CharsetStandard, ColorModel, ColorStandard, DirectColorDriver, DisplayList,
+    Draw, DrawCmd, DrawOp, ElevationArchetype, EscapeEmitter, Indexed256Driver, MonochromeDriver,
+    Rasterizer, RenderNode, SpatialCost, TerminalDriver, TerminalProfile, quantize_to_ansi16,
+    quantize_to_indexed256,
 };
 
 // Re-export terminal primitives

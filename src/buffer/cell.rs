@@ -28,6 +28,8 @@ pub enum Color {
     #[default]
     Reset,
     Rgb(u8, u8, u8),
+    /// 8-bit indexed palette color (0..255).
+    Indexed(u8),
     Black,
     Red,
     Green,
@@ -51,6 +53,7 @@ impl Color {
     pub fn as_rgb(self) -> Option<(u8, u8, u8)> {
         match self {
             Color::Rgb(r, g, b) => Some((r, g, b)),
+            Color::Indexed(idx) => Some(indexed_to_rgb(idx)),
             _ => None,
         }
     }
@@ -85,6 +88,7 @@ impl Color {
     fn to_rgb_approx(self) -> (u8, u8, u8) {
         match self {
             Color::Rgb(r, g, b) => (r, g, b),
+            Color::Indexed(idx) => indexed_to_rgb(idx),
             Color::Reset | Color::Black => (0, 0, 0),
             Color::Red | Color::LightRed => (224, 108, 117),
             Color::Green | Color::LightGreen => (127, 216, 143),
@@ -157,10 +161,51 @@ impl fmt::Display for Color {
         match self {
             Color::Reset => f.write_str("reset"),
             Color::Rgb(r, g, b) => write!(f, "#{r:02X}{g:02X}{b:02X}"),
+            Color::Indexed(idx) => write!(f, "idx({idx})"),
             Color::Black => f.write_str("#000"),
             Color::White => f.write_str("#FFF"),
             other => write!(f, "{:?}", other),
         }
+    }
+}
+
+/// Translate an 8-bit color index (0..255) to standard (r, g, b) values.
+pub const fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
+    if idx < 16 {
+        // Standard ANSI 16 palette
+        const ANSI16_RGB: [(u8, u8, u8); 16] = [
+            (0, 0, 0),       // 0: Black
+            (170, 0, 0),     // 1: Red
+            (0, 170, 0),     // 2: Green
+            (170, 85, 0),    // 3: Yellow
+            (0, 0, 170),     // 4: Blue
+            (170, 0, 170),   // 5: Magenta
+            (0, 170, 170),   // 6: Cyan
+            (170, 170, 170), // 7: Gray
+            (85, 85, 85),    // 8: DarkGray
+            (255, 85, 85),   // 9: LightRed
+            (85, 255, 85),   // 10: LightGreen
+            (255, 255, 85),  // 11: LightYellow
+            (85, 85, 255),   // 12: LightBlue
+            (255, 85, 255),  // 13: LightMagenta
+            (85, 255, 255),  // 14: LightCyan
+            (255, 255, 255), // 15: White
+        ];
+        ANSI16_RGB[idx as usize]
+    } else if idx < 232 {
+        // 6x6x6 color cube: indices 16..231
+        let val = idx - 16;
+        let b = val % 6;
+        let g = (val / 6) % 6;
+        let r = val / 36;
+        const fn to_cube_channel(c: u8) -> u8 {
+            if c == 0 { 0 } else { 55 + c * 40 }
+        }
+        (to_cube_channel(r), to_cube_channel(g), to_cube_channel(b))
+    } else {
+        // 24 grayscale steps: indices 232..255
+        let gray = 8 + (idx - 232) * 10;
+        (gray, gray, gray)
     }
 }
 
